@@ -12,6 +12,14 @@ import pandas as pd
 
 import torchvision.transforms.functional as Ftrans
 
+from monai.data import PersistentDataset
+from monai.transforms import (
+    LoadImaged,
+    SpatialCropd,
+    ToTensord,
+    Compose,
+)
+
 
 class ImageDataset(Dataset):
     def __init__(
@@ -714,3 +722,50 @@ class Repeat(Dataset):
     def __getitem__(self, index):
         index = index % self.original_len
         return self.dataset[index]
+
+
+# =========================
+# ===== BRATS DATASET =====
+# =========================
+
+# custom dataset class
+class BraTSDataset(PersistentDataset):
+    
+    def __init__(self, dataset_dir, cache_dir):
+
+        self.dataset_dir = dataset_dir
+        self.cache_dir = cache_dir
+        
+        self.brats_df = self.get_brats_df()
+        self.slice_idx = 75
+        self.transform_seq = Compose([
+            LoadImaged(keys = ["img"]),
+            SpatialCropd(keys = ["img"], roi_slices = [slice(None), slice(self.slice_idx, self.slice_idx+1), slice(None)]),
+            ToTensord(keys = ["img"])
+        ])
+
+        super().__init__(
+            data = [{"img": nii_path, "index": i} for i, nii_path in enumerate(self.brats_df["t1_path"])],
+            transform = self.transform_seq,
+            cache_dir = self.cache_dir,
+        )
+
+    def get_brats_df(self):
+
+        # load CSVs
+        name_mapping_df = pd.read_csv(os.path.join(self.dataset_dir, "name_mapping.csv"))
+        survival_df = pd.read_csv(os.path.join(self.dataset_dir, "survival_info.csv"))
+        survival_df = survival_df.rename({"Brats20ID": "BraTS_2020_subject_ID"}, axis = 1) # rename column for merge
+
+        # merge
+        brats_df = name_mapping_df.merge(survival_df, how = "outer", on = "BraTS_2020_subject_ID")
+
+        # get subject-specific paths for all image modalities
+        def get_subj_nii_path(subj, modality, wdir):
+            return os.path.join(wdir, subj, subj + "_" + modality + ".nii")
+        for modality in ["t1", "t2", "flair", "t1ce", "seg"]:
+            brats_df[modality + "_path"] = brats_df["BraTS_2020_subject_ID"].map(
+                lambda subj: get_subj_nii_path(subj, modality, self.dataset_dir)
+            )
+
+        return brats_df

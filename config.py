@@ -301,6 +301,11 @@ class TrainConfig(BaseConfig):
                               original_resolution=None,
                               crop_d2c=True,
                               **kwargs)
+        elif self.data_name == "brats":
+            return BraTSDataset(
+                self.brats_dataset_dir,
+                self.brats_cache_dir
+            )
         else:
             raise NotImplementedError()
 

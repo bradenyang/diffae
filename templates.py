@@ -1,4 +1,5 @@
 from experiment import *
+from tempfile import mkdtemp
 
 
 def ddpm():
@@ -125,7 +126,8 @@ def ffhq128_ddpm():
 def ffhq128_autoenc_base():
     conf = autoenc_base()
     conf.data_name = 'ffhqlmdb256'
-    conf.scale_up_gpus(4)
+    # conf.scale_up_gpus(4)
+    conf.scale_up_gpus(2)
     conf.img_size = 128
     conf.net_ch = 128
     # final resolution = 8x8
@@ -298,4 +300,28 @@ def pretrain_bedroom128():
         path=f'checkpoints/{bedroom128_autoenc().name}/last.ckpt',
     )
     conf.latent_infer_path = f'checkpoints/{bedroom128_autoenc().name}/latent.pkl'
+    return conf
+
+
+# =========================
+# ===== BRATS DATASET =====
+# =========================
+
+def brats_autoenc():
+
+    conf = autoenc_base()
+    conf.data_name = 'brats'
+    conf.total_samples = 1_000_000
+    conf.img_size = 240
+    conf.net_ch = 240
+    conf.net_ch_mult = (1, 1, 2, 3, 4)
+    conf.net_enc_channel_mult = (1, 2, 4, 8, 8)
+    conf.eval_every_samples = 1_000_000
+    conf.eval_ema_every_samples = 1_000_000
+    conf.scale_up_gpus(1)
+
+    conf.brats_dataset_dir = "/scratch/b.y.yang/brats2020/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData"
+    conf.brats_cache_dir = mkdtemp(dir = "/scratch/b.y.yang")
+
+    conf.make_model_conf()
     return conf
