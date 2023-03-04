@@ -24,8 +24,9 @@ if __name__ == '__main__':
         # train the autoenc moodel
         # this requires V100s.
         # gpus = [0, 1, 2, 3]
-        gpus = [0]
+        gpus = [0, 1]
         conf = brats_autoenc()
+        conf.scale_up_gpus(2)
 
         train(conf, gpus=gpus)
 

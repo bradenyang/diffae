@@ -312,10 +312,10 @@ def brats_autoenc():
     conf = autoenc_base()
     conf.data_name = 'brats'
     conf.total_samples = 1_000_000
-    conf.img_size = 240
-    conf.net_ch = 240
+    conf.img_size = 128
+    conf.net_ch = 128
     conf.net_ch_mult = (1, 1, 2, 3, 4)
-    conf.net_enc_channel_mult = (1, 2, 4, 8, 8)
+    conf.net_enc_channel_mult = (1, 1, 2, 3, 4, 4)
     conf.eval_every_samples = 1_000_000
     conf.eval_ema_every_samples = 1_000_000
     conf.scale_up_gpus(1)

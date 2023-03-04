@@ -12,13 +12,21 @@ import pandas as pd
 
 import torchvision.transforms.functional as Ftrans
 
+# BYY imports
+from typing import Dict, Hashable, Mapping
+
+from monai.config import KeysCollection
 from monai.data import PersistentDataset
 from monai.transforms import (
+    Transform,
+    MapTransform,
     LoadImaged,
     SpatialCropd,
+    Resized,
     ToTensord,
     Compose,
 )
+import numpy as np
 
 
 class ImageDataset(Dataset):
@@ -728,6 +736,73 @@ class Repeat(Dataset):
 # ===== BRATS DATASET =====
 # =========================
 
+# custom MONAI transformers
+# I got the template class from someone else's code lol
+class GrayscaleToRGB(Transform):
+    def __init__(
+        self,
+    ) -> None:
+        pass
+
+    def __call__(self, img: np.ndarray) -> np.ndarray:
+
+        # squeeze img
+        img = img.squeeze()
+
+        # ensure that img is 2D
+        if not np.ndim(img) == 2:
+            raise ValueError("Image dimensions must be equal to 2")
+
+        # repeat grayscale image along first dimension (color channel)
+        img = np.tile(img, (3,1,1))
+
+        return img
+
+class GrayscaleToRGBd(MapTransform):
+    def __init__(
+        self,
+        keys: KeysCollection,
+        allow_missing_keys: bool = False,
+    ) -> None:
+
+        super().__init__(keys, allow_missing_keys)
+        self.grayscale_to_rgb = GrayscaleToRGB()
+
+    def __call__(
+        self, data: Mapping[Hashable, np.ndarray]
+    ) -> Dict[Hashable, np.ndarray]:
+        d = dict(data)
+        for key in self.key_iterator(d):
+            d[key] = self.grayscale_to_rgb(d[key])
+        return d
+
+class Squeeze2Dd(MapTransform):
+    def __init__(
+        self,
+        keys: KeysCollection,
+        allow_missing_keys: bool = False,
+    ) -> None:
+
+        super().__init__(keys, allow_missing_keys)
+
+    def __call__(
+        self, data: Mapping[Hashable, np.ndarray]
+    ) -> Dict[Hashable, np.ndarray]:
+        d = dict(data)
+        for key in self.key_iterator(d):
+            # first squeeze
+            img = (d[key]).squeeze()
+
+            # ensure that img is 2D
+            if not np.ndim(img) == 2:
+                raise ValueError("Image dimensions must be equal to 2")
+
+            # reshape to (1, img.shape[0], img.shape[1])
+            img = img.reshape((1, *img.shape))
+
+            d[key] = img
+        return d
+
 # custom dataset class
 class BraTSDataset(PersistentDataset):
     
@@ -741,6 +816,9 @@ class BraTSDataset(PersistentDataset):
         self.transform_seq = Compose([
             LoadImaged(keys = ["img"]),
             SpatialCropd(keys = ["img"], roi_slices = [slice(None), slice(self.slice_idx, self.slice_idx+1), slice(None)]),
+            Squeeze2Dd(keys = ["img"]),
+            Resized(keys = ["img"], spatial_size = (128, 128), size_mode = "all"),  # resize to 128 x 128
+            GrayscaleToRGBd(keys = ["img"]),
             ToTensord(keys = ["img"])
         ])
 
