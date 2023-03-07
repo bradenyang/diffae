@@ -24,9 +24,9 @@ if __name__ == '__main__':
         # train the autoenc moodel
         # this requires V100s.
         # gpus = [0, 1, 2, 3]
-        gpus = [0, 1]
+        gpus = [0]
         conf = brats_autoenc()
-        conf.scale_up_gpus(2)
+        conf.scale_up_gpus(1)
 
         train(conf, gpus=gpus)
 
@@ -52,4 +52,4 @@ if __name__ == '__main__':
 
     finally:
         # remove cache dir
-        if os.path.isdir(conf.brats_cache_dir): rmtree(conf.brats_cache_dir)
+        if os.path.isdir(conf.brats_cache_dir): rmtree(conf.brats_cache_dir, ignore_errors=True)
