@@ -13,6 +13,7 @@ import pandas as pd
 import torchvision.transforms.functional as Ftrans
 
 # BYY imports
+from glob import glob
 from typing import Dict, Hashable, Mapping
 
 from monai.config import KeysCollection
@@ -24,10 +25,13 @@ from monai.transforms import (
     SpatialCropd,
     Resized,
     RandFlipd,
+    RandRotated,
+    ScaleIntensityd,
     ToTensord,
     Compose,
 )
 import numpy as np
+from sklearn.model_selection import GroupShuffleSplit
 
 
 class ImageDataset(Dataset):
@@ -805,7 +809,7 @@ class Squeeze2Dd(MapTransform):
         return d
 
 # custom dataset class
-class BraTSDataset(PersistentDataset):
+class BraTSDataset():
     
     def __init__(self, dataset_dir, cache_dir):
 
@@ -817,23 +821,38 @@ class BraTSDataset(PersistentDataset):
         self.brats_df = self.get_brats_df() # first get main df
         self.brats_df = self.get_slices_df() # then update df to include paths to slices
 
+        # filter slices
+        self.brats_df = self.filter_slices(75)
+
+        # define bounding box
+        self.bbox_slice_row = slice(22, 216, None)
+        self.bbox_slice_col = slice(29, 223, None)
+
+        # train-test split
+        self.train_df, self.test_df = self.get_train_test_split()
+
         # MONAI sequence of transforms
-        self.slice_idx = 75
-        self.transform_seq = Compose([
+        self.transform_seq_train = Compose([
             LoadImaged(keys = ["img"]),
-            # SpatialCropd(keys = ["img"], roi_slices = [slice(None), slice(self.slice_idx, self.slice_idx+1), slice(None)]),
             Squeeze2Dd(keys = ["img"]),
+            SpatialCropd(keys = ["img"], roi_slices = [self.bbox_slice_row, self.bbox_slice_col, slice(None)]),
+            ScaleIntensityd(keys = ["img"]),
             Resized(keys = ["img"], spatial_size = (128, 128), size_mode = "all"),  # resize to 1 x 128 x 128
-            GrayscaleToRGBd(keys = ["img"]), # make into 3 RGB channels
+            GrayscaleToRGBd(keys = ["img"]),
             RandFlipd(keys = ["img"], prob = 0.5, spatial_axis = 0), # random left-right axis flip
+            RandRotated(keys = ["img"], range_x = 10 * np.pi / 180, prob = 0.5, padding_mode = "zeros"), # random 10-degree rotation
             ToTensord(keys = ["img"]),
         ])
 
-        super().__init__(
-            data = [{"img": nii_path, "index": i} for i, nii_path in enumerate(self.brats_df["slice_path"])],
-            transform = self.transform_seq,
-            cache_dir = self.cache_dir,
-        )
+        self.transform_seq_test = Compose([
+            LoadImaged(keys = ["img"]),
+            Squeeze2Dd(keys = ["img"]),
+            SpatialCropd(keys = ["img"], roi_slices = [self.bbox_slice_row, self.bbox_slice_col, slice(None)]),
+            ScaleIntensityd(keys = ["img"]),
+            Resized(keys = ["img"], spatial_size = (128, 128), size_mode = "all"),  # resize to 1 x 128 x 128
+            GrayscaleToRGBd(keys = ["img"]),
+            ToTensord(keys = ["img"]),
+        ])
 
     def get_brats_df(self):
 
@@ -861,19 +880,13 @@ class BraTSDataset(PersistentDataset):
             # define wdir path
             wdir = os.path.join(dataset_dir, subj)
 
-            # load segmentation stats dataframe
-            seg_stats_df = pd.read_csv(os.path.join(wdir, f"{subj}_seg_stats.txt"), delim_whitespace=True)
-            slices_with_tumor = seg_stats_df[seg_stats_df["max"] > 0]["slice_num"].values
-
-            # get paths to slices with tumor and create dataframe
-            slices_with_tumor_str = np.char.zfill(slices_with_tumor.astype(str), 4)
-            slice_path = [os.path.join(dataset_dir, subj, f"{modality}_slices", f"{subj}_{modality}_slice_{s}.nii.gz") for s in slices_with_tumor_str]
+            slice_path = glob(os.path.join(wdir, f"{modality}_slices", f"{subj}_{modality}_slice_*.nii.gz"))
             slice_path_df = pd.DataFrame({"slice_path": slice_path})
             slice_path_df["BraTS_2020_subject_ID"] = subj
 
             return slice_path_df
         
-        brats_slice_df = pd.concat([get_slice_df_subj(subj, self.dataset_dir, "t1") for subj in self.brats_df["BraTS_2020_subject_ID"]])
+        brats_slice_df = pd.concat([get_slice_df_subj(subj, self.dataset_dir, "t1ce") for subj in self.brats_df["BraTS_2020_subject_ID"]])
         brats_slice_df = pd.merge(
             self.brats_df,
             brats_slice_df,
@@ -882,3 +895,39 @@ class BraTSDataset(PersistentDataset):
         )
 
         return brats_slice_df
+
+    def filter_slices(self, perc_background_thresh):
+        
+        # first load dataframe with percentage of background voxels for each slice
+        perc_background_df = pd.read_csv("/scratch/b.y.yang/ESE5934-project/code/select_slices/perc_background.csv")
+
+        # get slices that fall below perc_background_thresh
+        slices_select = perc_background_df.loc[perc_background_df["perc_background"] < perc_background_thresh, "slice_path"]
+
+        # filter slices that appear in list
+        return self.brats_df.loc[self.brats_df["slice_path"].isin(slices_select), :]
+
+    def get_train_test_split(self):
+
+        shuffle_split = GroupShuffleSplit(n_splits = 1, test_size = 0.2, random_state = 42)
+        train_idx, test_idx = next(shuffle_split.split(X = self.brats_df, groups = self.brats_df["BraTS_2020_subject_ID"]))
+
+        train_df = self.brats_df.iloc[train_idx, :]
+        test_df = self.brats_df.iloc[test_idx, :]
+
+        return train_df, test_df
+
+    def get_dataset(self, test = False):
+
+        if test:
+            return PersistentDataset(
+                data = [{"img": nii_path, "index": i} for i, nii_path in enumerate(self.test_df["slice_path"])],
+                transform = self.transform_seq_test,
+                cache_dir = self.cache_dir,
+            )
+        else:
+            return PersistentDataset(
+                data = [{"img": nii_path, "index": i} for i, nii_path in enumerate(self.train_df["slice_path"])],
+                transform = self.transform_seq_train,
+                cache_dir = self.cache_dir,
+            )
